@@ -86,13 +86,33 @@ int main (int argc, char **argv) {
 	strcpy(account->name, " "); //temporary identifier to know whether the name is uninitialized
 	while (1) {
 		bzero(buf, 256); //clears out the buffer
-		buf[0] = '\0';
 		int error = 0;
-		if (read(acceptsockfd, buf, 255) < 0) { //attempting to read in request from the client. For now server just says what it's going to do
+		if (read(acceptsockfd, buf, 4) < 0) { //attempting to read in request from the client. For now server just says what it's going to do
 			char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
 			write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 			return -1;	
 		}
+		int i;
+		char numBytes[4];
+		for (i = 0; i < 4; i++) {
+			if (foundChars == 0) {
+				if(buf[i] == ':') {
+					numBytes[i] = '\0';
+					break;
+				}
+				else {
+					numBytes[i] = buf[i];
+				}	
+			}
+		}
+		memset(buf, 0, sizeof(char)*strlen(buf));
+		int messageLength = atoi(numBytes);
+		if (read(acceptsockfd, buf, messageLength) < 0) { //attempting to read in request from the client.
+			char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
+			write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
+			return -1;	
+		}
+		write(STDOUT, buf, sizeof(char)*strlen(buf));
 		char *commandInfo = (char *)malloc(sizeof(char)*strlen(buf)-1);
 		memset(commandInfo, 0, sizeof(char)*strlen(buf)-1);
 		if (strcmp(buf, "quit\n") == 0) {
@@ -145,7 +165,7 @@ int main (int argc, char **argv) {
 		}
 		else { //create, serve, deposit, and withdraw are all indicated by the first char of buf
 			memcpy(commandInfo, &buf[1], sizeof(char)*(strlen(buf)-1)); //gets bytes 1-end of buffer into commandInfo
-			write(STDOUT, commandInfo, sizeof(char)*strlen(commandInfo));
+			//write(STDOUT, commandInfo, sizeof(char)*strlen(commandInfo));
 			Node *curr = (Node *)malloc(sizeof(Node));
 			switch(buf[0]) {
 				case 'c': //create
