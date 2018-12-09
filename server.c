@@ -29,64 +29,6 @@ int *numSessions; // stores the total number of sessions currently in use, mutex
 int *bufferSize; // a dynamically sized buffer used for resizing of handles array, mutex4
 pthread_mutex_t mutex0, mutex1, mutex2, mutex3, mutex4; // mutexes for our data, see the variables above
 
-void * sessionAcceptorThread(void *param){
-	int sockfd = *((int *)param);
-	char *message; //the message to be sent from server to client
-	struct sockaddr_in clientAddress;
-
-	while(1){
-		listen(sockfd, 5); //listening for client connections to the port
-		int clientLength = sizeof(clientAddress);
-		int acceptsockfd = accept(sockfd, (struct sockaddr *)&clientAddress, &clientLength); //blocks the process up until the connection with the client has been established
-		if (acceptsockfd < 0) {
-			char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
-			writeFatalError(errorMessage);
-			pthread_exit(NULL);	
-		}
-		message = "Server has successfully accepted the connection request from the client.\n";
-		write(acceptsockfd, message, sizeof(char)*strlen(message)); //confirmation to client that server has accepted client request
-		write(STDOUT, message, sizeof(char)*strlen(message)); //not sure if server also has to announce acceptance confirmation directly to its STDOUT, so I'm doing both
-
-		// Set up the new thread
-		int *newParam = (int *)malloc(sizeof(int));
-		*newParam = acceptsockfd;
-
-		pthread_t *threadHandle = (pthread_t *)malloc(sizeof(pthread_t));
-		pthread_attr_t threadAttr;
-		if (pthread_attr_init(&threadAttr) != 0) {
-			writeFatalError("Thread attributes not initialized properly. Exiting program.");
-			pthread_exit(NULL);
-		}
-	
-		void * (*fnPtr)(void *) = clientServiceThread;
-
-		// Update the relevant global variables
-		pthread_mutex_lock(mutex2);
-		pthread_mutex_lock(mutex3);
-		if (*numSessions == *bufferSize){ // resize needed on the buffer
-			pthread_mutex_lock(mutex4);
-			*bufferSize = *bufferSize * 4;
-			pthread_t temp[bufferSize];
-			memcpy((void *)temp, (void *)(*handles), sizeof(local));
-			*handles = temp;
-			pthread_mutex_unlock(mutex4);
-		}
-
-		handles[numSessions] = (Handler *)malloc(sizeof(Handler));
-		handles[numSessions]->threadHandle = (pthread_t *)malloc(sizeof(pthread_t)); // storing for later use for pthread_join
-		handles[numSessions]->threadHandle = threadHandle;
-		handles[numSessions]->socketfd = (int *)malloc(sizeof(int)); // storing for later use in case of shutdown
-		handles[numSessions]->socketfd = newParam;
-
-		*numSessions = *numSessions + 1;
-		pthread_mutex_lock(mutex3);
-		pthread_mutex_lock(mutex2);
-		pthread_create(threadHandle, &threadAttr, fnPtr, (void *)newParam);		
-	}
-
-	pthread_exit(NULL);
-}
-
 /*******************
 	BORDER WHERE YOU SPAWN A NEW THREAD TO HANDLE EVERY INDIVIDUAL ACCOUNT
 ********************/
@@ -95,6 +37,7 @@ void * clientServiceThread(void *param){
 	Account *account = NULL;
 	int clientEnd = 0;
 	int acceptsockfd = *((int *)param);
+	char buf[256];
 	
 	while (clientEnd == 0) {
 		bzero(buf, 256); //clears out the buffer
@@ -162,11 +105,11 @@ void * clientServiceThread(void *param){
 				memset(accountName, 0, sizeof(char)*256);
 				strcpy(accountName, account->name);
 				account = NULL; //update locally in the thread
-				pthread_mutex_lock(mutex0);
+				pthread_mutex_lock(&mutex0);
 				Node *curr = (Node *)malloc(sizeof(Node));
 				curr = head;
 				int i;
-				for (i = 0; i < totalAccounts; i++) {
+				for (i = 0; i < *totalAccounts; i++) {
 					Account *acct = curr->accnt;
 					if (strcmp(acct->name, accountName) == 0) {
 						*(acct->service) = 0;
@@ -174,7 +117,7 @@ void * clientServiceThread(void *param){
 					}
 					curr = curr->next;
 				}
-				pthread_mutex_unlock(mutex0);
+				pthread_mutex_unlock(&mutex0);
 				char *successMessage = "The service session for the account has been ended.\n";
 				write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));
 				continue;
@@ -183,7 +126,7 @@ void * clientServiceThread(void *param){
 		else { //create, serve, deposit, and withdraw are all indicated by the first char of buf
 			memcpy(commandInfo, &buf[1], sizeof(char)*(strlen(buf)-1)); //gets bytes 1-end of buffer into commandInfo
 			//write(STDOUT, commandInfo, sizeof(char)*strlen(commandInfo));
-			pthread_mutex_lock(mutex0);
+			pthread_mutex_lock(&mutex0);
 			Node *curr = (Node *)malloc(sizeof(Node));
 			curr = head;
 			int i;
@@ -191,7 +134,7 @@ void * clientServiceThread(void *param){
 				case 'c': ; //create
 					int repeat = 0;
 					//loop through the global list of accounts and see if any account has the same name as the one provided
-					for (i = 0; i < totalAccounts; i++) {
+					for (i = 0; i < *totalAccounts; i++) {
 						Account *acct = curr->accnt;
 						/*if (curr->accnt->name == NULL) {
 							//last node in LL contains an account with null name, it's where the new account will be added
@@ -218,9 +161,9 @@ void * clientServiceThread(void *param){
 					//updating the local account pointer by simply malloc'ing space for a pointer and setting it to point to the newly created global account pointer 
 					current->next = (Node *)malloc(sizeof(Node *));
 					current = current->next; //last node of LL (current) gets contents of account copied over into it and move onto next node in LL for next addition
-					pthread_mutex_lock(mutex1);
+					pthread_mutex_lock(&mutex1);
 					*totalAccounts = *totalAccounts + 1;
-					pthread_mutex_unlock(mutex1);
+					pthread_mutex_unlock(&mutex1);
 					char *successMessage = "The account has been created successfully.\n";
 					write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));
 					break;
@@ -231,17 +174,15 @@ void * clientServiceThread(void *param){
 						write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 					}
 					int found = 0;
-					for (i = 0; i < totalAccounts; i++) {
+					for (i = 0; i < *totalAccounts; i++) {
 						Account *acct = curr->accnt;
 						if (strcmp(acct->name, commandInfo) == 0) {
+							if (*(acct->service) == 1){
+								break;
+							}
 							account = (Account *)malloc(sizeof(Account));
 							*(acct->service) = 1;
 							account = acct;
-							//memcpy(account, acct, sizeof(Account *));
-							//strcpy(account->name, acct->name);
-							//bal = *(acct->balance);
-							//account->balance = &bal;
-							//*(account->service) = 1;
 							found = 1;
 							break;
 						}
@@ -264,7 +205,7 @@ void * clientServiceThread(void *param){
 					else {
 						*(account->balance) = *(account->balance) + atof(commandInfo); //updating deposit locally
 						int i;
-						for (i = 0; i < totalAccounts; i++) {
+						for (i = 0; i < *totalAccounts; i++) {
 							Account *acct = curr->accnt;
 							if (strcmp(acct->name, account->name) == 0) {
 								*(acct->balance) = *(account->balance); //the value stored in the global balance is updated with the value now stored in the local balance
@@ -290,7 +231,7 @@ void * clientServiceThread(void *param){
 						else {
 							*(account->balance) = *(account->balance) - atof(commandInfo);
 							int i;
-							for (i = 0; i < totalAccounts; i++) {
+							for (i = 0; i < *totalAccounts; i++) {
 								Account *acct = curr->accnt;
 								if (strcmp(acct->name, account->name) == 0) {
 									*(acct->balance) = *(account->balance); //the value stored in the global balance is updated with the value now stored in the local balance
@@ -316,25 +257,82 @@ void * clientServiceThread(void *param){
 					char *errorMessage = "This shouldn't happen.\n";
 					write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 					break;
-
-				pthread_mutex_unlock(mutex0);
-
 			}
 			//outputs all current account's information
 			char outputBuf[256];
 			bzero(outputBuf,256);
 			outputBuf[0] = '\0';
 			curr = head;
-			for (i = 0; i < totalAccounts; i++) {
+			for (i = 0; i < *totalAccounts; i++) {
 				Account *acc = curr->accnt;
 				sprintf(outputBuf, "Account name : %s\nAccount balance: %f\nAccount Service Status: %d\n", *(acc->balance), acc->name, *(acc->service));
 				write(STDOUT, outputBuf, sizeof(char)*strlen(outputBuf));
 				curr = curr->next;	
 			}
+
+			pthread_mutex_unlock(&mutex0);
 		}
 	}
 
 	pthread_exit(NULL); // we have reached this point if the client has shut down
+}
+
+void * sessionAcceptorThread(void *param){
+	int sockfd = *((int *)param);
+	char *message; //the message to be sent from server to client
+	struct sockaddr_in clientAddress;
+
+	while(1){
+		listen(sockfd, 5); //listening for client connections to the port
+		int clientLength = sizeof(clientAddress);
+		int acceptsockfd = accept(sockfd, (struct sockaddr *)&clientAddress, &clientLength); //blocks the process up until the connection with the client has been established
+		if (acceptsockfd < 0) {
+			char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
+			writeFatalError(errorMessage);
+			pthread_exit(NULL);	
+		}
+		message = "Server has successfully accepted the connection request from the client.\n";
+		write(acceptsockfd, message, sizeof(char)*strlen(message)); //confirmation to client that server has accepted client request
+		write(STDOUT, message, sizeof(char)*strlen(message)); //not sure if server also has to announce acceptance confirmation directly to its STDOUT, so I'm doing both
+
+		// Set up the new thread
+		int *newParam = (int *)malloc(sizeof(int));
+		*newParam = acceptsockfd;
+
+		pthread_t *threadHandle = (pthread_t *)malloc(sizeof(pthread_t));
+		pthread_attr_t threadAttr;
+		if (pthread_attr_init(&threadAttr) != 0) {
+			writeFatalError("Thread attributes not initialized properly. Exiting program.");
+			pthread_exit(NULL);
+		}
+	
+		void * (*fnPtr)(void *) = clientServiceThread;
+
+		// Update the relevant global variables
+		pthread_mutex_lock(&mutex2);
+		pthread_mutex_lock(&mutex3);
+		if (*numSessions == *bufferSize){ // resize needed on the buffer
+			pthread_mutex_lock(&mutex4);
+			*bufferSize = *bufferSize * 4;
+			Handler temp[*bufferSize];
+			memcpy((void *)temp, (void *)(*handles), sizeof(handles));
+			*handles = temp;
+			pthread_mutex_unlock(&mutex4);
+		}
+
+		handles[*numSessions] = (Handler *)malloc(sizeof(Handler));
+		handles[*numSessions]->threadHandle = (pthread_t *)malloc(sizeof(pthread_t)); // storing for later use for pthread_join
+		handles[*numSessions]->threadHandle = threadHandle;
+		handles[*numSessions]->socketfd = (int *)malloc(sizeof(int)); // storing for later use in case of shutdown
+		handles[*numSessions]->socketfd = newParam;
+
+		*numSessions = *numSessions + 1;
+		pthread_mutex_unlock(&mutex3);
+		pthread_mutex_unlock(&mutex2);
+		pthread_create(threadHandle, &threadAttr, fnPtr, (void *)newParam);		
+	}
+
+	pthread_exit(NULL);
 }
 
 int main (int argc, char **argv) {
