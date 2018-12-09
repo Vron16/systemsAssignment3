@@ -168,13 +168,13 @@ int main (int argc, char **argv) {
 			sprintf(numChars,"%d",strlen(serverMessage));
 			strcat(firstMessage,numChars);
 			strcat(firstMessage,":"); // acts as separator
-			int size = strlen(numChars) + 1; % add one for the separator
-			int charCount = 0; % should go only to a max of 1
+			int size = strlen(numChars) + 1; // add one for the separator
+			int charCount = 0; // should go only to a max of 1
 			while (size < 4){
 				char addOn = serverMessage[charCount]; // starting at beginning of string
 				firstMessage[size] = addOn;
 				size++;
-				count++;
+				charCount++;
 			}
 	
 			if (write(sockfd, firstMessage, sizeof(char)*4) < 0) { //passes firstMessage onto the server 
