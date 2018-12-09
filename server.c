@@ -23,6 +23,7 @@
 //Global Variables
 Node *head; //stores the head of the linked list
 Node *current; //stores the current node that has a NULL account name and will be initialized on create
+int totalAccounts; //stores the total number of accounts currently in the bank
 double bal;
 int serv;
 int main (int argc, char **argv) {
@@ -40,12 +41,9 @@ int main (int argc, char **argv) {
 
 	//initializing memory for the global data structure of account nodes
 	head = (Node *)malloc(sizeof(Node));
-	memset(head, 0, sizeof(Node *));
-	Account *acctemp = (Account *)malloc(sizeof(Account));
-	acctemp->name = NULL;
-	memcpy(head->accnt, acctemp, sizeof(Account *));
 	current = (Node *)malloc(sizeof(Node));
 	current = head;
+	totalAccounts = 0;
 
 	sockfd = socket(AF_INET, SOCK_STREAM, 0); //creates a socket connection and generates a file descriptor for it
 	if (sockfd == -1) {
@@ -82,9 +80,10 @@ int main (int argc, char **argv) {
 
 	//allocating memory for a new account. Will not be added into the overall list of accounts with default values unless thread receives a create message from client
 	Account *account = (Account *)malloc(sizeof(Account));
-	memset(account, 0, sizeof(account));
-	account->name = NULL; //identifier, we can do null check on name to see whether account struct has been used yet
-	
+	//memset(account, 0, sizeof(account));
+	//account->name = NULL; //identifier, we can do null check on name to see whether there is a local account stored in this thread
+	memset(account->name, 0, sizeof(char)*strlen(account->name));
+	strcpy(account->name, " "); //temporary identifier to know whether the name is uninitialized
 	while (1) {
 		bzero(buf, 256); //clears out the buffer
 		buf[0] = '\0';
@@ -96,7 +95,6 @@ int main (int argc, char **argv) {
 		}
 		char *commandInfo = (char *)malloc(sizeof(char)*strlen(buf)-1);
 		memset(commandInfo, 0, sizeof(char)*strlen(buf)-1);
-	
 		if (strcmp(buf, "quit\n") == 0) {
 			write(acceptsockfd, "quit", sizeof(char)*4);
 			close(acceptsockfd); //closes connection with this particular client connection
@@ -132,7 +130,8 @@ int main (int argc, char **argv) {
 				*(account->service) = 0; //update locally in the thread
 				Node *curr = (Node *)malloc(sizeof(Node));
 				curr = head;
-				while (curr != NULL) {
+				int i;
+				for (i = 0; i < totalAccounts; i++) {
 					Account *acct = curr->accnt;
 					if (strcmp(acct->name, account->name) == 0) {
 						memcpy(acct, account, sizeof(Account *));
@@ -146,19 +145,20 @@ int main (int argc, char **argv) {
 		}
 		else { //create, serve, deposit, and withdraw are all indicated by the first char of buf
 			memcpy(commandInfo, &buf[1], sizeof(char)*(strlen(buf)-1)); //gets bytes 1-end of buffer into commandInfo
+			write(STDOUT, commandInfo, sizeof(char)*strlen(commandInfo));
 			Node *curr = (Node *)malloc(sizeof(Node));
 			switch(buf[0]) {
 				case 'c': //create
-					memset(curr, 0, sizeof(Node *));
 					curr = head;
 					int repeat = 0;
 					//loop through the global list of accounts and see if any account has the same name as the one provided
-					while (curr != NULL) {
+					int i;
+					for (i = 0; i < totalAccounts; i++) {
 						Account *acct = curr->accnt;
-						if (curr->accnt->name == NULL) {
+						/*if (curr->accnt->name == NULL) {
 							//last node in LL contains an account with null name, it's where the new account will be added
 							break;
-						}
+						}*/
 						if (strcmp(acct->name, account->name) == 0) {
 							char *errorMessage = "Please choose a different name, there's already an account with the name you entered.\n";
 							write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
@@ -167,7 +167,7 @@ int main (int argc, char **argv) {
 						curr = curr->next;
 					}
 					if (repeat == 1)
-						continue;
+						break;
 					//no accounts have same name, so we can proceed with account creation!
 					memset(account->name, 0, sizeof(char)*strlen(account->name)); //clearing the previous null data
 					strcpy(account->name, commandInfo); //setting the new name
