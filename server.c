@@ -22,75 +22,87 @@
 
 //Global Variables
 Node *head; //stores the head of the linked list
-Node *current; //stores the current node that has a NULL account name and will be initialized on create
-int totalAccounts; //stores the total number of accounts currently in the bank
-double bal;
-int serv;
-int main (int argc, char **argv) {
-	//Comamnd line input handling
-	if (argc != 2) {
-		char *errorMessage = "Missing command line arguments. Aborting program.\n";
-		writeFatalError(errorMessage);
-		return -1;
-	}
-	int port = atoi(argv[1]);
-	int sockfd, acceptsockfd, clientLength;
-	char buf[256];
-	struct sockaddr_in serverAddress, clientAddress;
+Node *current; //stores the current node that has a NULL account name and will be initialized on create, mutex0 will be used to lock around any changes to the LinkedList
+int *totalAccounts; //stores the total number of accounts currently in the bank, mutex1
+Handler **handles; // stores all opened thread handlesand socket file descriptors, mutex2
+int *numSessions; // stores the total number of sessions currently in use, mutex3
+int *bufferSize; // a dynamically sized buffer used for resizing of handles array, mutex4
+pthread_mutex_t mutex0, mutex1, mutex2, mutex3, mutex4; // mutexes for our data, see the variables above
+
+void * sessionAcceptorThread(void *param){
+	int sockfd = *((int *)param);
 	char *message; //the message to be sent from server to client
+	struct sockaddr_in clientAddress;
 
-	//initializing memory for the global data structure of account nodes
-	head = (Node *)malloc(sizeof(Node));
-	current = (Node *)malloc(sizeof(Node));
-	current = head;
-	totalAccounts = 0;
+	while(1){
+		listen(sockfd, 5); //listening for client connections to the port
+		int clientLength = sizeof(clientAddress);
+		int acceptsockfd = accept(sockfd, (struct sockaddr *)&clientAddress, &clientLength); //blocks the process up until the connection with the client has been established
+		if (acceptsockfd < 0) {
+			char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
+			writeFatalError(errorMessage);
+			pthread_exit(NULL);	
+		}
+		message = "Server has successfully accepted the connection request from the client.\n";
+		write(acceptsockfd, message, sizeof(char)*strlen(message)); //confirmation to client that server has accepted client request
+		write(STDOUT, message, sizeof(char)*strlen(message)); //not sure if server also has to announce acceptance confirmation directly to its STDOUT, so I'm doing both
 
-	sockfd = socket(AF_INET, SOCK_STREAM, 0); //creates a socket connection and generates a file descriptor for it
-	if (sockfd == -1) {
-		char *errorMessage = "Server unable to create socket. Aborting program.\n";
-		writeFatalError(errorMessage);
-		return -1;	
-	} 
-	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros everything in server address struct
-	serverAddress.sin_family = AF_INET; //establishes TCP as family of connection
-	serverAddress.sin_port = htons(port); //sets serverAddress struct's port info to the user-specified port
-	serverAddress.sin_addr.s_addr = INADDR_ANY; //sets server's address to the IP address of the current machine it's running on
+		// Set up the new thread
+		int *newParam = (int *)malloc(sizeof(int));
+		*newParam = acceptsockfd;
 
-	if (bind(sockfd, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0) { //attempt to weld the socket to the specified port
-		char *errorMessage = "Server unable to bind socket to the specified port. Aborting program.\n";
-		writeFatalError(errorMessage);
-		return -1;	
-	}
-	//TODO: spawn the a new thread that will listen and spawn new threads as necessary
-	listen(sockfd, 5); //listening for client connections to the port
-	clientLength = sizeof(clientAddress);
-	acceptsockfd = accept(sockfd, (struct sockaddr *)&clientAddress, &clientLength); //blocks the process up until the connection with the client has been established
-	if (acceptsockfd < 0) {
-		char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
-		writeFatalError(errorMessage);
-		return -1;	
-	}
-	message = "Server has successfully accepted the connection request from the client.\n";
-	write(acceptsockfd, message, sizeof(char)*strlen(message)); //confirmation to client that server has accepted client request
-	write(STDOUT, message, sizeof(char)*strlen(message)); //not sure if server also has to announce acceptance confirmation directly to its STDOUT, so I'm doing both
+		pthread_t *threadHandle = (pthread_t *)malloc(sizeof(pthread_t));
+		pthread_attr_t threadAttr;
+		if (pthread_attr_init(&threadAttr) != 0) {
+			writeFatalError("Thread attributes not initialized properly. Exiting program.");
+			pthread_exit(NULL);
+		}
 	
-	/*******************
-	BORDER WHERE YOU SPAWN A NEW THREAD TO HANDLE EVERY INDIVIDUAL ACCOUNT
-	********************/
+		void * (*fnPtr)(void *) = clientServiceThread;
 
+		// Update the relevant global variables
+		pthread_mutex_lock(mutex2);
+		pthread_mutex_lock(mutex3);
+		if (*numSessions == *bufferSize){ // resize needed on the buffer
+			pthread_mutex_lock(mutex4);
+			*bufferSize = *bufferSize * 4;
+			pthread_t temp[bufferSize];
+			memcpy((void *)temp, (void *)(*handles), sizeof(local));
+			*handles = temp;
+			pthread_mutex_unlock(mutex4);
+		}
+
+		handles[numSessions] = (Handler *)malloc(sizeof(Handler));
+		handles[numSessions]->threadHandle = (pthread_t *)malloc(sizeof(pthread_t)); // storing for later use for pthread_join
+		handles[numSessions]->threadHandle = threadHandle;
+		handles[numSessions]->socketfd = (int *)malloc(sizeof(int)); // storing for later use in case of shutdown
+		handles[numSessions]->socketfd = newParam;
+
+		*numSessions = *numSessions + 1;
+		pthread_mutex_lock(mutex3);
+		pthread_mutex_lock(mutex2);
+		pthread_create(threadHandle, &threadAttr, fnPtr, (void *)newParam);		
+	}
+
+	pthread_exit(NULL);
+}
+
+/*******************
+	BORDER WHERE YOU SPAWN A NEW THREAD TO HANDLE EVERY INDIVIDUAL ACCOUNT
+********************/
+void * clientServiceThread(void *param){
 	//allocating memory for a new account. Will not be added into the overall list of accounts with default values unless thread receives a create message from client
 	Account *account = NULL;
-	//memset(account, 0, sizeof(account));
-	//account->name = NULL; //identifier, we can do null check on name to see whether there is a local account stored in this thread
-	//memset(account->name, 0, sizeof(char)*256);
-	//strcpy(account->name, ""); //temporary identifier to know whether the name is uninitialized
-	while (1) {
+	int clientEnd = 0;
+	int acceptsockfd = *((int *)param);
+	
+	while (clientEnd == 0) {
 		bzero(buf, 256); //clears out the buffer
 		int error = 0;
 		if (read(acceptsockfd, buf, 4) < 0) { //attempting to read in request from the client. For now server just says what it's going to do
 			char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
 			write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
-			return -1;	
+			pthread_exit(NULL);	
 		}
 		int i;
 		char numBytes[4];
@@ -108,7 +120,7 @@ int main (int argc, char **argv) {
 		if (read(acceptsockfd, buf, messageLength) < 0) { //attempting to read in request from the client.
 			char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
 			write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
-			return -1;	
+			pthread_exit(NULL);	
 		}
 		//write(STDOUT, buf, sizeof(char)*strlen(buf));
 		char *commandInfo = (char *)malloc(sizeof(char)*strlen(buf)-1);
@@ -116,6 +128,7 @@ int main (int argc, char **argv) {
 		if (strcmp(buf, "quit\n") == 0) {
 			write(acceptsockfd, "quit", sizeof(char)*4);
 			close(acceptsockfd); //closes connection with this particular client connection
+			clientEnd = 1; // client has closed, time to join back
 		}
 		else if (strcmp(buf, "query\n") == 0) {
 			//if query is the first commmand, then account in thread has null name. If name isn't null, check that it's service flag is set to active, otherwise write error
@@ -149,6 +162,7 @@ int main (int argc, char **argv) {
 				memset(accountName, 0, sizeof(char)*256);
 				strcpy(accountName, account->name);
 				account = NULL; //update locally in the thread
+				pthread_mutex_lock(mutex0);
 				Node *curr = (Node *)malloc(sizeof(Node));
 				curr = head;
 				int i;
@@ -160,6 +174,7 @@ int main (int argc, char **argv) {
 					}
 					curr = curr->next;
 				}
+				pthread_mutex_unlock(mutex0);
 				char *successMessage = "The service session for the account has been ended.\n";
 				write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));
 				continue;
@@ -168,6 +183,7 @@ int main (int argc, char **argv) {
 		else { //create, serve, deposit, and withdraw are all indicated by the first char of buf
 			memcpy(commandInfo, &buf[1], sizeof(char)*(strlen(buf)-1)); //gets bytes 1-end of buffer into commandInfo
 			//write(STDOUT, commandInfo, sizeof(char)*strlen(commandInfo));
+			pthread_mutex_lock(mutex0);
 			Node *curr = (Node *)malloc(sizeof(Node));
 			curr = head;
 			int i;
@@ -202,7 +218,9 @@ int main (int argc, char **argv) {
 					//updating the local account pointer by simply malloc'ing space for a pointer and setting it to point to the newly created global account pointer 
 					current->next = (Node *)malloc(sizeof(Node *));
 					current = current->next; //last node of LL (current) gets contents of account copied over into it and move onto next node in LL for next addition
-					totalAccounts = totalAccounts + 1;
+					pthread_mutex_lock(mutex1);
+					*totalAccounts = *totalAccounts + 1;
+					pthread_mutex_unlock(mutex1);
 					char *successMessage = "The account has been created successfully.\n";
 					write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));
 					break;
@@ -250,7 +268,6 @@ int main (int argc, char **argv) {
 							Account *acct = curr->accnt;
 							if (strcmp(acct->name, account->name) == 0) {
 								*(acct->balance) = *(account->balance); //the value stored in the global balance is updated with the value now stored in the local balance
-								//memcpy(acct, account, sizeof(Account *));
 								break;
 							}
 							curr = curr->next;
@@ -277,7 +294,6 @@ int main (int argc, char **argv) {
 								Account *acct = curr->accnt;
 								if (strcmp(acct->name, account->name) == 0) {
 									*(acct->balance) = *(account->balance); //the value stored in the global balance is updated with the value now stored in the local balance
-									//memcpy(acct, account, sizeof(Account *));
 									break;
 								}
 								curr = curr->next;
@@ -301,6 +317,8 @@ int main (int argc, char **argv) {
 					write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 					break;
 
+				pthread_mutex_unlock(mutex0);
+
 			}
 			//outputs all current account's information
 			char outputBuf[256];
@@ -315,5 +333,84 @@ int main (int argc, char **argv) {
 			}
 		}
 	}
+
+	pthread_exit(NULL); // we have reached this point if the client has shut down
+}
+
+int main (int argc, char **argv) {
+	//Comamnd line input handling
+	if (argc != 2) {
+		char *errorMessage = "Missing command line arguments. Aborting program.\n";
+		writeFatalError(errorMessage);
+		return -1;
+	}
+	int port = atoi(argv[1]);
+	int* sockfd = (int *)malloc(sizeof(int));
+	char buf[256];
+	struct sockaddr_in serverAddress;
+
+	//initializing memory for the global data structure of account nodes
+	head = (Node *)malloc(sizeof(Node));
+	current = (Node *)malloc(sizeof(Node));
+	current = head;
+	totalAccounts = (int *)malloc(sizeof(int));
+	*totalAccounts = 0;
+	numSessions = (int *)malloc(sizeof(int)); // keep track of all sessions (active and ended)
+	*numSessions = 0;
+	bufferSize = (int *)malloc(sizeof(int));
+	*bufferSize = 10; // start off with a max of 10 sessions
+	handles = (Handler **)malloc(sizeof(Handler *)*(*bufferSize)); // initialize the table that we will use later
+
+	*sockfd = socket(AF_INET, SOCK_STREAM, 0); //creates a socket connection and generates a file descriptor for it
+	if (*sockfd == -1) {
+		char *errorMessage = "Server unable to create socket. Aborting program.\n";
+		writeFatalError(errorMessage);
+		return -1;	
+	} 
+
+	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros everything in server address struct
+	serverAddress.sin_family = AF_INET; //establishes TCP as family of connection
+	serverAddress.sin_port = htons(port); //sets serverAddress struct's port info to the user-specified port
+	serverAddress.sin_addr.s_addr = INADDR_ANY; //sets server's address to the IP address of the current machine it's running on
+
+	if (bind(*sockfd, (struct sockaddr *)&serverAddress, sizeof(serverAddress)) < 0) { //attempt to weld the socket to the specified port
+		char *errorMessage = "Server unable to bind socket to the specified port. Aborting program.\n";
+		writeFatalError(errorMessage);
+		return -1;	
+	}
+
+	// Set up the mutexes
+	if (pthread_mutex_init(&mutex0, NULL) != 0) {
+		writeFatalError("Mutex 0 could not be properly initialized.\n");
+		return -1;
+	}
+	if (pthread_mutex_init(&mutex1, NULL) != 0) {
+		writeFatalError("Mutex 1 could not be properly initialized.\n");	
+		return -1;
+	}
+	if (pthread_mutex_init(&mutex2, NULL) != 0){
+		writeFatalError("Mutex 2 could not be properly initialized.\n");
+		return -1;
+	}
+	if (pthread_mutex_init(&mutex3, NULL) != 0){
+		writeFatalError("Mutex 3 could not be properly initialized.\n");
+		return -1;
+	}
+	if (pthread_mutex_init(&mutex4, NULL) != 0){
+		writeFatalError("Mutex 4 could not be properly initialized.\n");
+		return -1;
+	}
+
+	//TODO: spawn the a new thread that will listen and spawn new threads as necessary
+	pthread_t *threadHandle = (pthread_t *)malloc(sizeof(pthread_t));
+	pthread_attr_t threadAttr;
+	if (pthread_attr_init(&threadAttr) != 0) {
+		writeFatalError("Thread attributes not initialized properly. Exiting program.");
+		return -1;
+	}
+	
+	pthread_create(threadHandle, &threadAttr, sessionAcceptorThread, (void *)sockfd);
+	pthread_join(*threadHandle, NULL); // wait for sessionAcceptorThread to end
+	
 	return 0;
 }

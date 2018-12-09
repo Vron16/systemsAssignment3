@@ -26,14 +26,19 @@ typedef struct account {
 	int *service; //points to int storing 0 or 1 depending on whether the account is being served or not
 	double *balance; //contains the balance currently stored in the account
 	char name[256]; //stores the name associated with this account, might need to change to char * for thread implementation
-
 } Account;
 
 //abstraction that holds itself and a pointer to the next
 typedef struct node {
 	Account *accnt; //stores pointer to a specific account struct
 	struct node *next; //stores pointer to the next node in the list
-
 } Node;
+
+// abstraction that holds a pthread_t thread handle and its associated socket fd
+// this is needed in case the Server is ever interrupted and needs to abruptly shut down
+typedef struct package {
+	pthread_t *threadHandle;
+	int *socketfd;
+} Handler;
 
 #endif
