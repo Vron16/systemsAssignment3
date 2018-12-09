@@ -25,7 +25,7 @@
 typedef struct account {
 	int *service; //points to int storing 0 or 1 depending on whether the account is being served or not
 	double *balance; //contains the balance currently stored in the account
-	char name[256]; //stores the name associated with this account
+	char name[256]; //stores the name associated with this account, might need to change to char * for thread implementation
 
 } Account;
 
