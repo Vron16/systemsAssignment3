@@ -47,6 +47,7 @@ int main (int argc, char **argv) {
 	if (sockfd == -1) {
 		char *errorMessage = "Unable to open a socket. Aborting program.\n";
 		writeFatalError(errorMessage);
+		return -1;
 	}
 	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros all contents in the struct
 	serverAddress.sin_port = htons(port); //sets port number in the server address struct
@@ -60,6 +61,7 @@ int main (int argc, char **argv) {
 	if (read(sockfd, buf, 255) < 0) {
 		char *errorMessage = "Unable to read from the server. Aborting program.\n";
 		writeFatalError(errorMessage);	
+		return -1;
 	}
 	//try to look for server's acceptance message and output that
 	write(STDOUT, buf, sizeof(char)*strlen(buf));
@@ -75,6 +77,7 @@ int main (int argc, char **argv) {
 		if (read(STDIN, temp, sizeof(char)*255) < 0) {
 			char *errorMessage = "Unable to read from standard input. Aborting program.\n";
 			writeFatalError(errorMessage);
+			return -1;
 		}
 		char temp2[256];
 		bzero(temp2, 256);
@@ -149,14 +152,39 @@ int main (int argc, char **argv) {
 		}*/
 		if (incorrectInput == 0) {
 			//serverMessage must now be populated with the properly parsed message based on the user input
+			char firstMessage[4];
+			memset(firstMessage,0,sizeof(char)*4);
+			char numChars[4]; // should be a max of three digits long
+			memset(numChars,0,sizeof(char)*3);
+			sprintf(numChars,"%d",strlen(serverMessage));
+			strcat(firstMessage,numChars);
+			strcat(firstMessage,":"); // acts as separator
+			int size = strlen(numChars) + 1; % add one for the separator
+			int charCount = 0; % should go only to a max of 1
+			while (size < 4){
+				char addOn = serverMessage[charCount]; // starting at beginning of string
+				firstMessage[size] = addOn;
+				size++;
+				count++;
+			}
+	
+			if (write(sockfd, firstMessage, sizeof(char)*4) < 0) { //passes firstMessage onto the server 
+				char *errorMessage = "Unable to write to the server. Aborting program.\n";
+				writeFatalError(errorMessage);
+				return -1;
+			}
+			
 			if (write(sockfd, serverMessage, sizeof(char)*strlen(serverMessage)) < 0) { //passes serverMessage onto the server 
 				char *errorMessage = "Unable to write to the server. Aborting program.\n";
 				writeFatalError(errorMessage);
+				return -1;
 			}
+
 			bzero(buf, 256);
 			if (read(sockfd, buf, 255) < 0) {
 				char *errorMessage = "Unable to read from the server. Aborting program.\n";
 				writeFatalError(errorMessage);	
+				return -1;
 			}
 			write(STDOUT, buf, sizeof(char)*strlen(buf));
 			char newLine = '\n';
