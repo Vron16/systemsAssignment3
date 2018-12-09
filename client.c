@@ -20,6 +20,7 @@
 
 #include "client.h"
 
+char *accountInService; // String representing the account name currently in service, will be passed back by the server upon success of operations
 
 int main (int argc, char **argv) {
 	//Command line input handling
@@ -67,6 +68,9 @@ int main (int argc, char **argv) {
 	write(STDOUT, buf, sizeof(char)*strlen(buf));
 	char newLine = '\n';
 	write(STDOUT, &newLine, sizeof(char));
+
+	// Set up error checking
+	accountInService = NULL; // no account should be in service in the beginning
 	while(1) {
 		int incorrectInput = 0; 
 		char *prompt = "Welcome to Mike and Varun's Bank! Please enter one of the following commands:\ncreate - to create a new account\nserve - to open a new service session with an existing account\ndeposit - to add money to an account you have a service session with\nwithdraw - to extract money from an account you have a service session with\nquery - to return the current account balance from an account you have a service session with\nend - to end an existing service session\nquit - to exit this window entirely.\n";
@@ -152,6 +156,11 @@ int main (int argc, char **argv) {
 		}*/
 		if (incorrectInput == 0) {
 			//serverMessage must now be populated with the properly parsed message based on the user input
+			// firstMessage should look something like this -> "10:c"
+			// The numbers serve to give the size of the message being sent
+			// The ':' acts as a separator that the server will look for to parse the input
+			// If there are any remaining characters that we need to fill up, we will fill them
+			// with the first couple of characters from the serverMessage;
 			char firstMessage[4];
 			memset(firstMessage,0,sizeof(char)*4);
 			char numChars[4]; // should be a max of three digits long
