@@ -17,6 +17,8 @@
 #include <signal.h>
 #include <pthread.h>
 #include <netdb.h>
+#include <semaphore.h>
+#include <sys/time.h>
 
 #include "server.h"
 
@@ -28,6 +30,35 @@ Handler **handles; // stores all opened thread handlesand socket file descriptor
 int *numSessions; // stores the total number of sessions currently in use, mutex3
 int *bufferSize; // a dynamically sized buffer used for resizing of handles array, mutex4
 pthread_mutex_t mutex0, mutex1, mutex2, mutex3, mutex4; // mutexes for our data, see the variables above
+sem_t binarySem; // binary semaphore that will be used for the SIGALARM
+
+void sigAlarmHandler(int signal){
+	sem_wait(&binarySem); //wait until other threads finish up
+	// Print diagnostic output
+	//outputs all current account's information
+	char *greeting = "SERVER DIAGNOSTIC INFORMATION\n";
+	write(STDOUT,greeting,sizeof(char)*strlen(greeting));
+	char outputBuf[500];
+	bzero(outputBuf,500);
+	outputBuf[0] = '\0';
+	Node *curr = (Node *)malloc(sizeof(Node));
+	curr = head;
+	int i;
+	for (i = 0; i < *totalAccounts; i++) {
+		Account *acc = curr->accnt;
+		char *inServiceStatus;
+		if (*(acc->service)){
+			inServiceStatus = "IN SERVICE";
+		} else {
+			inServiceStatus = "NOT IN SERVICE";
+		}
+		sprintf(outputBuf, "Account name : %s\tAccount balance: %f\tAccount Service Status: %s\n", *(acc->balance), acc->name, inServiceStatus);
+		write(STDOUT, outputBuf, sizeof(char)*strlen(outputBuf));
+		curr = curr->next;	
+	}
+	sem_post(&binarySem); // unlock the semaphore
+}
+
 
 /*******************
 	BORDER WHERE YOU SPAWN A NEW THREAD TO HANDLE EVERY INDIVIDUAL ACCOUNT
@@ -69,6 +100,27 @@ void * clientServiceThread(void *param){
 		char *commandInfo = (char *)malloc(sizeof(char)*strlen(buf)-1);
 		memset(commandInfo, 0, sizeof(char)*strlen(buf)-1);
 		if (strcmp(buf, "quit\n") == 0) {
+			if (account != NULL){ // we need to free an in service account if it exists
+				char accountName[256]; //since we have to reset our local copy to null, must store the account name first before going through global LL
+				memset(accountName, 0, sizeof(char)*256);
+				strcpy(accountName, account->name);
+				account = NULL; //update locally in the thread
+				pthread_mutex_lock(&mutex0);
+				Node *curr = (Node *)malloc(sizeof(Node));
+				curr = head;
+				int i;
+				for (i = 0; i < *totalAccounts; i++) {
+					Account *acct = curr->accnt;
+					if (strcmp(acct->name, accountName) == 0) {
+						sem_wait(&binarySem); // block CS due to actual changes
+						*(acct->service) = 0;
+						sem_post(&binarySem); // we are done servicing the account
+						break;
+					}
+					curr = curr->next;
+				}
+			}
+			
 			write(acceptsockfd, "quit", sizeof(char)*4);
 			close(acceptsockfd); //closes connection with this particular client connection
 			clientEnd = 1; // client has closed, time to join back
@@ -112,7 +164,9 @@ void * clientServiceThread(void *param){
 				for (i = 0; i < *totalAccounts; i++) {
 					Account *acct = curr->accnt;
 					if (strcmp(acct->name, accountName) == 0) {
+						sem_wait(&binarySem); // block CS to make update
 						*(acct->service) = 0;
+						sem_post(&binarySem); // re-open once update is made
 						break;
 					}
 					curr = curr->next;
@@ -151,6 +205,7 @@ void * clientServiceThread(void *param){
 					if (repeat == 1) 
 						break;
 					//no accounts have same name, so we can proceed with account creation!
+					sem_wait(&binarySem); // block on operation before SIGALARM goes off
 					current->accnt = (Account *)malloc(sizeof(Account)); //malloc'ing space in the GLOBAL database for a new account
 					memset(current->accnt->name, 0, sizeof(char)*256); //clearing the previous null data
 					strcpy(current->accnt->name, commandInfo); //setting the new name for the current account
@@ -164,6 +219,7 @@ void * clientServiceThread(void *param){
 					pthread_mutex_lock(&mutex1);
 					*totalAccounts = *totalAccounts + 1;
 					pthread_mutex_unlock(&mutex1);
+					sem_post(&binarySem); // end block so SIGALARM can occur if needed
 					char *successMessage = "The account has been created successfully.\n";
 					write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));
 					break;
@@ -181,7 +237,9 @@ void * clientServiceThread(void *param){
 								break;
 							}
 							account = (Account *)malloc(sizeof(Account));
+							sem_wait(&binarySem); // prevent SIGALARM before update occurs
 							*(acct->service) = 1;
+							sem_post(&binarySem); // unlock semaphore for SIGALARM and other threads
 							account = acct;
 							found = 1;
 							break;
@@ -203,6 +261,7 @@ void * clientServiceThread(void *param){
 						write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 					}
 					else {
+						sem_wait(&binarySem); // prevent SIGALARM from going off
 						*(account->balance) = *(account->balance) + atof(commandInfo); //updating deposit locally
 						int i;
 						for (i = 0; i < *totalAccounts; i++) {
@@ -214,7 +273,8 @@ void * clientServiceThread(void *param){
 							curr = curr->next;
 						}
 						char *successMessage = "The specified amount was deposited successfully into the account.\n";
-						write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));		
+						write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));	
+						sem_post(&binarySem); // unlock the semaphore for SIGALARM and other threads	
 					}
 					break;
 				case 'w': //withdraw
@@ -229,6 +289,7 @@ void * clientServiceThread(void *param){
 							write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 						}
 						else {
+							sem_wait(&binarySem); // prevent SIGALARM from occuring
 							*(account->balance) = *(account->balance) - atof(commandInfo);
 							int i;
 							for (i = 0; i < *totalAccounts; i++) {
@@ -250,6 +311,7 @@ void * clientServiceThread(void *param){
 							}*/
 							char *successMessage = "The requested amount was successfully withdrawn from the account currently being served.\n";
 							write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));
+							sem_post(&binarySem); // unlock semaphore for SIGALARM and other threads
 						}
 					}
 					break;
@@ -258,18 +320,6 @@ void * clientServiceThread(void *param){
 					write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 					break;
 			}
-			//outputs all current account's information
-			char outputBuf[256];
-			bzero(outputBuf,256);
-			outputBuf[0] = '\0';
-			curr = head;
-			for (i = 0; i < *totalAccounts; i++) {
-				Account *acc = curr->accnt;
-				sprintf(outputBuf, "Account name : %s\nAccount balance: %f\nAccount Service Status: %d\n", *(acc->balance), acc->name, *(acc->service));
-				write(STDOUT, outputBuf, sizeof(char)*strlen(outputBuf));
-				curr = curr->next;	
-			}
-
 			pthread_mutex_unlock(&mutex0);
 		}
 	}
@@ -336,12 +386,25 @@ void * sessionAcceptorThread(void *param){
 }
 
 int main (int argc, char **argv) {
-	//Comamnd line input handling
+	//Command line input handling
 	if (argc != 2) {
 		char *errorMessage = "Missing command line arguments. Aborting program.\n";
 		writeFatalError(errorMessage);
 		return -1;
 	}
+
+	// Set up signal handlers and timer
+	struct itimerval myTimer;
+	myTimer.it_value.tv_sec = 15; // set timer to 15 seconds
+	myTimer.it_value.tv_usec = 0.2; // set uncertainty in timer value
+	myTimer.it_interval = myTimer.it_value;
+	if(setitimer(ITIMER_REAL, &myTimer, NULL) == -1){
+		char *errorMessage = "Couldn't set up itimer.  Aborting server.\n";
+		writeFatalError(errorMessage);
+		return -1;
+	}
+	signal(SIGALRM, sigAlarmHandler);
+
 	int port = atoi(argv[1]);
 	int* sockfd = (int *)malloc(sizeof(int));
 	char buf[256];
@@ -396,6 +459,10 @@ int main (int argc, char **argv) {
 	}
 	if (pthread_mutex_init(&mutex4, NULL) != 0){
 		writeFatalError("Mutex 4 could not be properly initialized.\n");
+		return -1;
+	}
+	if(sem_init(&binarySem, 0, 1) != 0){
+		writeFatalError("Semaphore could not be properly initialized.\n");
 		return -1;
 	}
 
