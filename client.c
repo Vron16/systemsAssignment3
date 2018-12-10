@@ -96,6 +96,13 @@ void *commandInputThread(void *param){
 						incorrectInput = 1;
 						break;
 					}
+					else if (strcmp(serverMessage, "d") == 0 || (strcmp(serverMessage, "w") == 0)) { //if we received a deposit or withdraw command make sure double is positive
+						double value = atof(token);
+						if (value <= 0) {
+							char *errorMessage = "Invalid amount. Only enter positive decimal values.\n";			
+							write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
+						}
+					}
 					strcat(serverMessage, token); //just concatenate the rest of the string, so now serverMessage = first letter of command + accountName
 				}
 			}
@@ -178,7 +185,9 @@ void *responseOutputThread(void *param){
 			*serverRunning = 0; // server has shut us down
 			pthread_mutex_unlock(&mutex0);
 			close(sockfd);
-			pthread_exit(NULL); // start closing down everything
+			char *shutdown = "The server has been shut down due to the end of business hours, so we'll have to end your session. Come back another day!\n";
+			write(STDOUT, shutdown, sizeof(char)*strlen(shutdown));
+			exit(1); // start closing down everything
 		}
 
 		write(STDOUT, buf, sizeof(char)*strlen(buf));
