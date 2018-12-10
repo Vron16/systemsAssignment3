@@ -21,57 +21,20 @@
 #include "client.h"
 
 char *accountInService; // String representing the account name currently in service, will be passed back by the server upon success of operations
+int *serverRunning; // mutex0
+pthread_mutex_t mutex0;
 
-int main (int argc, char **argv) {
-	//Command line input handling
-	if (argc != 3) {
-		char *errorMessage = "Missing command line arguments. Aborting program.\n";
-		writeFatalError(errorMessage);
-		return -1;
-	}
-	char* machine = argv[1]; //extracts the address of the host machine from user input
-	int port = atoi(argv[2]); //extracts necessary port number from the user input
+// Thread used exclusively to send commands to server
+// Must include standard user error checking that the server shouldn't have to deal with
+void *commandInputThread(void *param){
+	// Set up error checking
+	int sockfd = *((int *)param);
+	accountInService = NULL; // no account should be in service in the beginning
 
-	struct hostent *serverIP;
-	int sockfd;
-	struct sockaddr_in serverAddress;
 	char buf[256]; //buffer for server communication
 	char temp[256]; //buffer for user communication
-	
-	serverIP = gethostbyname(machine); //creates hostent struct from the provided address if possible
-	if (!serverIP) {
-		char *errorMessage = "Unable to find a host with the provided address. Aborting program.\n";
-		writeFatalError(errorMessage);
-		return -1;	
-	}
-	sockfd = socket(AF_INET, SOCK_STREAM, 0); //creates socket and sockfd stores file descriptor
-	if (sockfd == -1) {
-		char *errorMessage = "Unable to open a socket. Aborting program.\n";
-		writeFatalError(errorMessage);
-		return -1;
-	}
-	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros all contents in the struct
-	serverAddress.sin_port = htons(port); //sets port number in the server address struct
-	serverAddress.sin_family = AF_INET; //selects TCP as type of network address
-	bcopy((char *)serverIP->h_addr, (char *)&serverAddress.sin_addr.s_addr, serverIP->h_length); //bytewise raw copy from serverIP hostent to relevant part of serverAddress
-	while (connect(sockfd, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) == -1) {
-		write(STDOUT, "Attempting to connect to server, please wait...\n", 48);
-		sleep(3); //if unable to connect to the server, wait 3 seconds and try again
-	}
-	bzero(buf, 256);
-	if (read(sockfd, buf, 255) < 0) {
-		char *errorMessage = "Unable to read from the server. Aborting program.\n";
-		writeFatalError(errorMessage);	
-		return -1;
-	}
-	//try to look for server's acceptance message and output that
-	write(STDOUT, buf, sizeof(char)*strlen(buf));
-	char newLine = '\n';
-	write(STDOUT, &newLine, sizeof(char));
 
-	// Set up error checking
-	accountInService = NULL; // no account should be in service in the beginning
-	while(1) {
+	while(*serverRunning) {
 		int incorrectInput = 0; 
 		char *prompt = "Welcome to Mike and Varun's Bank! Please enter one of the following commands:\ncreate - to create a new account\nserve - to open a new service session with an existing account\ndeposit - to add money to an account you have a service session with\nwithdraw - to extract money from an account you have a service session with\nquery - to return the current account balance from an account you have a service session with\nend - to end an existing service session\nquit - to exit this window entirely.\n";
 		write(STDOUT, prompt, sizeof(char)*strlen(prompt));
@@ -81,7 +44,7 @@ int main (int argc, char **argv) {
 		if (read(STDIN, temp, sizeof(char)*255) < 0) {
 			char *errorMessage = "Unable to read from standard input. Aborting program.\n";
 			writeFatalError(errorMessage);
-			return -1;
+			pthread_exit(NULL);
 		}
 		char temp2[256];
 		bzero(temp2, 256);
@@ -180,26 +143,131 @@ int main (int argc, char **argv) {
 			if (write(sockfd, firstMessage, sizeof(char)*4) < 0) { //passes firstMessage onto the server 
 				char *errorMessage = "Unable to write to the server. Aborting program.\n";
 				writeFatalError(errorMessage);
-				return -1;
+				pthread_exit(NULL);
 			}
 			
 			if (write(sockfd, serverMessage, sizeof(char)*strlen(serverMessage)) < 0) { //passes serverMessage onto the server 
 				char *errorMessage = "Unable to write to the server. Aborting program.\n";
 				writeFatalError(errorMessage);
-				return -1;
-			}
-
-			bzero(buf, 256);
-			if (read(sockfd, buf, 255) < 0) {
-				char *errorMessage = "Unable to read from the server. Aborting program.\n";
-				writeFatalError(errorMessage);	
-				return -1;
-			}
-			write(STDOUT, buf, sizeof(char)*strlen(buf));
-			char newLine = '\n';
-			write(STDOUT, &newLine, sizeof(char));	
+				pthread_exit(NULL);
+			}	
 		}
+
+		sleep(2); //throttle user input for 2 seconds
 	}
-	close(sockfd);
+	
+	// Assume the output thread has closed the socket at this point
+	pthread_exit(NULL);
+}
+
+// Thread used exclusively to read diagnostic output from server
+void *responseOutputThread(void *param){
+	int sockfd = *((int *)param);
+	char buf[256]; //buffer for server communication
+
+	while (*serverRunning){
+		bzero(buf, 256);
+		if (read(sockfd, buf, 255) < 0) {
+			char *errorMessage = "Unable to read from the server. Aborting program.\n";
+			writeFatalError(errorMessage);	
+			pthread_exit(NULL);
+		}
+
+		if (strcmp(buf,"quit") == 0){ // received shutdown message from server
+			pthread_mutex_lock(&mutex0);
+			*serverRunning = 0; // server has shut us down
+			pthread_mutex_unlock(&mutex0);
+			close(sockfd);
+			pthread_exit(NULL); // start closing down everything
+		}
+
+		write(STDOUT, buf, sizeof(char)*strlen(buf));
+		char newLine = '\n';
+		write(STDOUT, &newLine, sizeof(char));
+	}
+	
+	pthread_exit(NULL);
+}
+
+int main (int argc, char **argv) {
+	//Command line input handling
+	if (argc != 3) {
+		char *errorMessage = "Missing command line arguments. Aborting program.\n";
+		writeFatalError(errorMessage);
+		return -1;
+	}
+	char* machine = argv[1]; //extracts the address of the host machine from user input
+	int port = atoi(argv[2]); //extracts necessary port number from the user input
+
+	struct hostent *serverIP;
+	int sockfd;
+	struct sockaddr_in serverAddress;
+	char buf[256]; //buffer for server communication
+	
+	serverIP = gethostbyname(machine); //creates hostent struct from the provided address if possible
+	if (!serverIP) {
+		char *errorMessage = "Unable to find a host with the provided address. Aborting program.\n";
+		writeFatalError(errorMessage);
+		return -1;	
+	}
+	sockfd = socket(AF_INET, SOCK_STREAM, 0); //creates socket and sockfd stores file descriptor
+	if (sockfd == -1) {
+		char *errorMessage = "Unable to open a socket. Aborting program.\n";
+		writeFatalError(errorMessage);
+		return -1;
+	}
+	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros all contents in the struct
+	serverAddress.sin_port = htons(port); //sets port number in the server address struct
+	serverAddress.sin_family = AF_INET; //selects TCP as type of network address
+	bcopy((char *)serverIP->h_addr, (char *)&serverAddress.sin_addr.s_addr, serverIP->h_length); //bytewise raw copy from serverIP hostent to relevant part of serverAddress
+	while (connect(sockfd, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) == -1) {
+		write(STDOUT, "Attempting to connect to server, please wait...\n", 48);
+		sleep(3); //if unable to connect to the server, wait 3 seconds and try again
+	}
+
+	bzero(buf, 256);
+	if (read(sockfd, buf, 255) < 0) {
+		char *errorMessage = "Unable to read from the server. Aborting program.\n";
+		writeFatalError(errorMessage);	
+		return -1;
+	}
+	//try to look for server's acceptance message and output that
+	write(STDOUT, buf, sizeof(char)*strlen(buf));
+	char newLine = '\n';
+	write(STDOUT, &newLine, sizeof(char));
+
+	// Setting up parameters to be passed to each thread
+	serverRunning = (int *)malloc(sizeof(int));
+	*serverRunning = 1;
+	int *socketfd = (int *)malloc(sizeof(int));
+	*socketfd = sockfd;
+
+	if (pthread_mutex_init(&mutex0, NULL) != 0) {
+		writeFatalError("Mutex 0 could not be properly initialized.\n");
+		return -1;
+	}
+
+	// Now that we know the server is all ready to go, we should set up the two threads that we need to use
+	pthread_t *commandThreadHandle = (pthread_t *)malloc(sizeof(pthread_t));
+	pthread_attr_t commandThreadAttr;
+	if (pthread_attr_init(&commandThreadAttr) != 0) {
+		writeFatalError("Thread attributes not initialized properly. Exiting program.\n");
+		return -1;
+	}
+
+	pthread_create(commandThreadHandle, &commandThreadAttr, commandInputThread, (void *)socketfd);
+
+	pthread_t *outputThreadHandle = (pthread_t *)malloc(sizeof(pthread_t));
+	pthread_attr_t outputThreadAttr;
+	if (pthread_attr_init(&outputThreadAttr) != 0) {
+		writeFatalError("Thread attributes not initialized properly. Exiting program.\n");
+		return -1;
+	}
+
+	pthread_create(outputThreadHandle, &outputThreadAttr, responseOutputThread, (void *)socketfd);
+
+	pthread_join(*commandThreadHandle, NULL);
+	pthread_join(*outputThreadHandle, NULL);
+
 	return 0;
 }
