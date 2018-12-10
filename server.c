@@ -173,6 +173,7 @@ void * clientServiceThread(void *param){
 				char accountName[256]; //since we have to reset our local copy to null, must store the account name first before going through global LL
 				memset(accountName, 0, sizeof(char)*256);
 				strcpy(accountName, account->name);
+				write(STDOUT, accountName, sizeof(char)*strlen(accountName));
 				account = NULL; //update locally in the thread
 				pthread_mutex_lock(&mutex0);
 				Node *curr = (Node *)malloc(sizeof(Node));
@@ -181,6 +182,7 @@ void * clientServiceThread(void *param){
 				for (i = 0; i < *totalAccounts; i++) {
 					Account *acct = curr->accnt;
 					if (strcmp(acct->name, accountName) == 0) {
+						write(STDOUT, "Found account to end service.\n", sizeof(char)*30);
 						sem_wait(&binarySem); // block CS to make update
 						*(acct->service) = 0;
 						sem_post(&binarySem); // re-open once update is made
