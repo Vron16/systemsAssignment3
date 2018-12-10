@@ -46,17 +46,34 @@ void sigAlarmHandler(int signal){
 	int i;
 	for (i = 0; i < *totalAccounts; i++) {
 		Account *acc = curr->accnt;
-		char *inServiceStatus;
+		char *inServiceMessage;
 		if (*(acc->service)){
-			inServiceStatus = "IN SERVICE";
+			inServiceMessage = "IN SERVICE";
 		} else {
-			inServiceStatus = "NOT IN SERVICE";
+			inServiceMessage = "NOT IN SERVICE";
 		}
-		sprintf(outputBuf, "Account name : %s\tAccount balance: %f\tAccount Service Status: %s\n", *(acc->balance), acc->name, inServiceStatus);
+		sprintf(outputBuf, "Account name : %s\tAccount balance: %f\tAccount Service Status: %s\n", *(acc->balance), acc->name, inServiceMessage);
 		write(STDOUT, outputBuf, sizeof(char)*strlen(outputBuf));
 		curr = curr->next;	
 	}
 	sem_post(&binarySem); // unlock the semaphore
+}
+
+// Shutdown the server and terminate all clients
+void sigIntHandler(int signal){
+	int i;
+	for (i = 0; i < *numSessions; i++){
+		Handler *myHandle = handles[i];
+		pthread_cancel(*(myHandle->threadHandle));
+		free(myHandle->threadHandle);
+		write(*(myHandle->socketfd),"quit",sizeof(char)*4); // send the shutdown message
+		close(*(myHandle->socketfd));
+		free(myHandle->socketfd);
+		free(myHandle);
+	}
+
+	sem_destroy(&binarySem);
+	exit(1);
 }
 
 
@@ -404,6 +421,7 @@ int main (int argc, char **argv) {
 		return -1;
 	}
 	signal(SIGALRM, sigAlarmHandler);
+	signal(SIGINT, sigIntHandler);
 
 	int port = atoi(argv[1]);
 	int* sockfd = (int *)malloc(sizeof(int));
