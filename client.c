@@ -18,6 +18,7 @@
 #include <pthread.h>
 #include <netdb.h>
 
+
 #include "client.h"
 
 char *accountInService; // String representing the account name currently in service, will be passed back by the server upon success of operations
@@ -211,6 +212,8 @@ int main (int argc, char **argv) {
 	struct hostent *serverIP;
 	int sockfd;
 	struct sockaddr_in serverAddress;
+	struct linger so_linger;
+	int sockRetVal;
 	char buf[256]; //buffer for server communication
 	
 	serverIP = gethostbyname(machine); //creates hostent struct from the provided address if possible
@@ -223,6 +226,14 @@ int main (int argc, char **argv) {
 	if (sockfd == -1) {
 		char *errorMessage = "Unable to open a socket. Aborting program.\n";
 		writeFatalError(errorMessage);
+		return -1;
+	}
+	so_linger.l_onoff = 0; //eliminates linger on socket (hopefully)
+	so_linger.l_linger = 0;
+	sockRetVal = setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
+	if (sockRetVal < 0) {
+		char *errorMessage = "Error when trying to set the socket linger values.\n";
+		write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
 		return -1;
 	}
 	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros all contents in the struct

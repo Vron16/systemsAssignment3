@@ -20,6 +20,7 @@
 #include <semaphore.h>
 #include <sys/time.h>
 
+
 #include "server.h"
 
 //Global Variables
@@ -85,6 +86,10 @@ void * clientServiceThread(void *param){
 	Account *account = NULL;
 	int clientEnd = 0;
 	int acceptsockfd = *((int *)param);
+	char tmp[256];
+	bzero(tmp, 256);
+	sprintf(tmp, "Socket file descriptor: %d\n", acceptsockfd);
+	write(STDOUT, tmp, sizeof(char)*strlen(tmp));
 	char buf[256];
 	
 	while (clientEnd == 0) {
@@ -113,7 +118,7 @@ void * clientServiceThread(void *param){
 			write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 			pthread_exit(NULL);	
 		}
-		//write(STDOUT, buf, sizeof(char)*strlen(buf));
+		write(STDOUT, buf, sizeof(char)*strlen(buf));
 		char *commandInfo = (char *)malloc(sizeof(char)*strlen(buf)-1);
 		memset(commandInfo, 0, sizeof(char)*strlen(buf)-1);
 		if (strcmp(buf, "quit\n") == 0) {
@@ -205,6 +210,11 @@ void * clientServiceThread(void *param){
 			int i;
 			switch(buf[0]) {
 				case 'c': ; //create
+					if (account != NULL) { //if the thread already has a local account, that means that there's an active service session
+						char *errorMessage = "You cannot create a new account during an active service session. End the session and then do all account creation\n";
+						write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
+						break;
+					}
 					int repeat = 0;
 					//loop through the global list of accounts and see if any account has the same name as the one provided
 					for (i = 0; i < *totalAccounts; i++) {
@@ -249,10 +259,12 @@ void * clientServiceThread(void *param){
 						write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 					}
 					int found = 0;
+					int anotherInUse = 0;
 					for (i = 0; i < *totalAccounts; i++) {
 						Account *acct = curr->accnt;
 						if (strcmp(acct->name, commandInfo) == 0) {
 							if (*(acct->service) == 1){
+								anotherInUse = 1;
 								break;
 							}
 							account = (Account *)malloc(sizeof(Account));
@@ -270,8 +282,15 @@ void * clientServiceThread(void *param){
 						write(acceptsockfd, successMessage, sizeof(char)*strlen(successMessage));
 					}
 					else {
-						char *errorMessage = "A service connection could not be opened to the requested account because it does not exist.\n";
-						write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
+						if (anotherInUse == 1) {
+							char *errorMessage = "A service connection could not be opened to the requested account because another client is accessing it right now.\n";
+							write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
+						}
+						else {
+							char *errorMessage = "A service connection could not be opened to the requested account because it does not exist.\n";
+							write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));	
+						}
+						
 					}
 					break;
 				case 'd': //deposit
@@ -350,6 +369,8 @@ void * sessionAcceptorThread(void *param){
 	int sockfd = *((int *)param);
 	char *message; //the message to be sent from server to client
 	struct sockaddr_in clientAddress;
+	struct linger so_linger;
+	int sockRetVal;
 
 	while(1){
 		listen(sockfd, 5); //listening for client connections to the port
@@ -359,6 +380,14 @@ void * sessionAcceptorThread(void *param){
 			char *errorMessage = "Server unable to accept the client's request to connect at the specified port. Aborting program.\n";
 			writeFatalError(errorMessage);
 			pthread_exit(NULL);	
+		}
+		so_linger.l_onoff = 0; //eliminates linger on socket (hopefully)
+		so_linger.l_linger = 0;
+		sockRetVal = setsockopt(acceptsockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
+		if (sockRetVal < 0) {
+			char *errorMessage = "Error when trying to set the socket linger values.\n";
+			write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
+			pthread_exit(NULL);
 		}
 		message = "Server has successfully accepted the connection request from the client.\n";
 		write(acceptsockfd, message, sizeof(char)*strlen(message)); //confirmation to client that server has accepted client request
@@ -427,6 +456,8 @@ int main (int argc, char **argv) {
 
 	int port = atoi(argv[1]);
 	int* sockfd = (int *)malloc(sizeof(int));
+	struct linger so_linger;
+	int sockRetVal;
 	char buf[256];
 	struct sockaddr_in serverAddress;
 
@@ -448,7 +479,14 @@ int main (int argc, char **argv) {
 		writeFatalError(errorMessage);
 		return -1;	
 	} 
-
+	so_linger.l_onoff = 0; //eliminates linger on socket (hopefully)
+	so_linger.l_linger = 0;
+	sockRetVal = setsockopt(*sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
+	if (sockRetVal < 0) {
+		char *errorMessage = "Error when trying to set the socket linger values.\n";
+		write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
+		return -1;
+	}
 	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros everything in server address struct
 	serverAddress.sin_family = AF_INET; //establishes TCP as family of connection
 	serverAddress.sin_port = htons(port); //sets serverAddress struct's port info to the user-specified port
