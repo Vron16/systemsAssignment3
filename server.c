@@ -141,8 +141,9 @@ void * clientServiceThread(void *param){
 					}
 					curr = curr->next;
 				}
+				pthread_mutex_unlock(&mutex0); // I am dumb
 			}
-			
+			printf("Found the account, exiting\n");	
 			write(acceptsockfd, "quit", sizeof(char)*4);
 			close(acceptsockfd); //closes connection with this particular client connection
 			clientEnd = 1; // client has closed, time to join back
@@ -361,8 +362,9 @@ void * clientServiceThread(void *param){
 			pthread_mutex_unlock(&mutex0);
 		}
 	}
-
-	pthread_exit(NULL); // we have reached this point if the client has shut down
+	
+	printf("Exiting thread...\n");
+	return NULL; // we have reached this point if the client has shut down
 }
 
 void * sessionAcceptorThread(void *param){
@@ -427,7 +429,8 @@ void * sessionAcceptorThread(void *param){
 		*numSessions = *numSessions + 1;
 		pthread_mutex_unlock(&mutex3);
 		pthread_mutex_unlock(&mutex2);
-		pthread_create(threadHandle, &threadAttr, fnPtr, (void *)newParam);		
+		pthread_create(threadHandle, &threadAttr, fnPtr, (void *)newParam);
+		pthread_detach(*threadHandle); // try detaching the thread to release all resources in the end		
 	}
 
 	pthread_exit(NULL);
