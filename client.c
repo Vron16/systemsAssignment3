@@ -97,6 +97,17 @@ void *commandInputThread(void *param){
 						break;
 					}
 					else if (strcmp(serverMessage, "d") == 0 || (strcmp(serverMessage, "w") == 0)) { //if we received a deposit or withdraw command make sure double is positive
+						int strIndex = 0;
+						while (token[strIndex] != '\0') {
+							char c = token[strIndex];
+							if (!(isdigit(c))) {
+								char *errorMessage = "Invalid amount. Only enter positive decimal values.\n";			
+								write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
+								incorrectInput = 1;
+								break;	
+							}
+							strIndex++;
+						}
 						double value = atof(token);
 						if (value <= 0) {
 							char *errorMessage = "Invalid amount. Only enter positive decimal values.\n";			
