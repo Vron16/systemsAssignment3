@@ -55,6 +55,7 @@ void *commandInputThread(void *param){
 		memset(serverMessage, 0, sizeof(char)*256);
 		int count = 0;
 		while (token != NULL) {
+			//removeSubstring(serverMessage,"\n");
 			if (count == 2) { //too many spaces!
 				char *errorMessage = "Incorrect input format. Try again.\n";
 				write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
@@ -98,9 +99,10 @@ void *commandInputThread(void *param){
 					}
 					else if (strcmp(serverMessage, "d") == 0 || (strcmp(serverMessage, "w") == 0)) { //if we received a deposit or withdraw command make sure double is positive
 						int strIndex = 0;
-						while (token[strIndex] != '\0') {
+						while (token[strIndex] != '\0' && token[strIndex] != '\n') {
 							char c = token[strIndex];
-							if (!(isdigit(c))) {
+							//write(STDOUT, &c, sizeof(char));
+							if (c < '0' || c > '9') {
 								char *errorMessage = "Invalid amount. Only enter positive decimal values.\n";			
 								write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
 								incorrectInput = 1;
