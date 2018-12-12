@@ -32,6 +32,7 @@ int *numSessions; // stores the total number of sessions currently in use, mutex
 int *bufferSize; // a dynamically sized buffer used for resizing of handles array, mutex4
 pthread_mutex_t mutex0, mutex1, mutex2, mutex3, mutex4; // mutexes for our data, see the variables above
 sem_t binarySem; // binary semaphore that will be used for the SIGALARM
+struct itimerval *myTimer; // 15 second timer that will trigger the SIGALARM
 
 void sigAlarmHandler(int signal){
 	// The following code is being run to prevent the edge case of a binary semaphore being waited on
@@ -92,6 +93,17 @@ void sigIntHandler(int signal){
 
 		numTries--;
 	}
+
+	// Destroy the timer
+	myTimer->it_value.tv_sec = 0;
+	myTimer->it_value.tv_usec = 0;
+	if(setitimer(ITIMER_REAL, myTimer, NULL) == -1){ //if both of the values are 0, itimer deactivates 
+		char *errorMessage = "Couldn't set up itimer.  Aborting server.\n";
+		writeFatalError(errorMessage);
+		exit(-1);
+	}
+
+	free(myTimer);
 
 	int i;
 	for (i = 0; i < *numSessions; i++){
@@ -316,6 +328,7 @@ void * clientServiceThread(void *param){
 					if (account != NULL) {
 						char *errorMessage = "A service connection could not be opened to the requested account because another service connection is active.\n";
 						write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
+						break;
 					}
 					int found = 0;
 					int anotherInUse = 0;
@@ -502,11 +515,12 @@ int main (int argc, char **argv) {
 	}
 
 	// Set up signal handlers and timer
-	struct itimerval myTimer;
-	myTimer.it_value.tv_sec = 15; // set timer to 15 seconds
-	myTimer.it_value.tv_usec = 0.2; // set uncertainty in timer value
-	myTimer.it_interval = myTimer.it_value;
-	if(setitimer(ITIMER_REAL, &myTimer, NULL) == -1){
+	//struct itimerval myTimer;
+	myTimer = (struct itimerval*)malloc(sizeof(struct itimerval));
+	myTimer->it_value.tv_sec = 15; // set timer to 15 seconds
+	myTimer->it_value.tv_usec = 0.2; // set microseconds in timer value
+	myTimer->it_interval = myTimer->it_value;
+	if(setitimer(ITIMER_REAL, myTimer, NULL) == -1){
 		char *errorMessage = "Couldn't set up itimer.  Aborting server.\n";
 		writeFatalError(errorMessage);
 		return -1;
