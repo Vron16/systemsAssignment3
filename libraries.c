@@ -14,3 +14,8 @@ void writeFatalError(char *errorMessage){
 	write(STDERR, errorMessage, sizeof(char)*strlen(errorMessage));
 	write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
 }
+
+void removeSubstring(char *str, const char *substr){
+	while( str=strstr(str,substr) )
+    		memmove(str,str+strlen(substr),1+strlen(str+strlen(substr)));
+}

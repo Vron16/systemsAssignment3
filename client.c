@@ -21,7 +21,6 @@
 
 #include "client.h"
 
-char *accountInService; // String representing the account name currently in service, will be passed back by the server upon success of operations
 int *serverRunning; // mutex0
 pthread_mutex_t mutex0;
 
@@ -30,7 +29,6 @@ pthread_mutex_t mutex0;
 void *commandInputThread(void *param){
 	// Set up error checking
 	int sockfd = *((int *)param);
-	accountInService = NULL; // no account should be in service in the beginning
 
 	char buf[256]; //buffer for server communication
 	char temp[256]; //buffer for user communication
@@ -41,12 +39,13 @@ void *commandInputThread(void *param){
 		write(STDOUT, prompt, sizeof(char)*strlen(prompt));
 		bzero(temp, 256);
 		char *message;
-		//temp[0] = '\0';
+		
 		if (read(STDIN, temp, sizeof(char)*255) < 0) {
 			char *errorMessage = "Unable to read from standard input. Aborting program.\n";
 			writeFatalError(errorMessage);
 			pthread_exit(NULL);
 		}
+		
 		char temp2[256];
 		bzero(temp2, 256);
 		strcpy(temp2, temp);
@@ -102,6 +101,8 @@ void *commandInputThread(void *param){
 						if (value <= 0) {
 							char *errorMessage = "Invalid amount. Only enter positive decimal values.\n";			
 							write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
+							incorrectInput = 1;
+							break;
 						}
 					}
 					strcat(serverMessage, token); //just concatenate the rest of the string, so now serverMessage = first letter of command + accountName
@@ -132,6 +133,7 @@ void *commandInputThread(void *param){
 			// The ':' acts as a separator that the server will look for to parse the input
 			// If there are any remaining characters that we need to fill up, we will fill them
 			// with the first couple of characters from the serverMessage;
+			removeSubstring(serverMessage,"\n");  // there is a pesky new line character that always ends up in the command, we don't want it taking up space
 			char firstMessage[4];
 			memset(firstMessage,0,sizeof(char)*4);
 			char numChars[4]; // should be a max of three digits long
@@ -186,6 +188,16 @@ void *responseOutputThread(void *param){
 			*serverRunning = 0; // server has shut us down
 			pthread_mutex_unlock(&mutex0);
 			close(sockfd);
+			char *shutdown = "You have ended your banking account session.  Thank you again for your business!\n";
+			write(STDOUT, shutdown, sizeof(char)*strlen(shutdown));
+			exit(1); // start closing down everything
+		}
+
+		if(strcmp(buf,"shutdown") == 0){  // server has shut down
+			pthread_mutex_lock(&mutex0);
+			*serverRunning = 0; // server has shut us down
+			pthread_mutex_unlock(&mutex0);
+			close(sockfd);
 			char *shutdown = "The server has been shut down due to the end of business hours, so we'll have to end your session. Come back another day!\n";
 			write(STDOUT, shutdown, sizeof(char)*strlen(shutdown));
 			exit(1); // start closing down everything
@@ -212,7 +224,7 @@ int main (int argc, char **argv) {
 	struct hostent *serverIP;
 	int sockfd;
 	struct sockaddr_in serverAddress;
-	struct linger so_linger;
+	//struct linger so_linger;
 	int sockRetVal;
 	char buf[256]; //buffer for server communication
 	
@@ -228,14 +240,17 @@ int main (int argc, char **argv) {
 		writeFatalError(errorMessage);
 		return -1;
 	}
-	so_linger.l_onoff = 0; //eliminates linger on socket (hopefully)
-	so_linger.l_linger = 0;
-	sockRetVal = setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
-	if (sockRetVal < 0) {
-		char *errorMessage = "Error when trying to set the socket linger values.\n";
-		write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
-		return -1;
-	}
+
+	// Uncomment if needed
+	//so_linger.l_onoff = 0; //eliminates linger on socket (hopefully)
+	//so_linger.l_linger = 0;
+	//sockRetVal = setsockopt(sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
+	//if (sockRetVal < 0) {
+	//	char *errorMessage = "Error when trying to set the socket linger values.\n";
+	//	write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
+	//	return -1;
+	//}
+
 	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros all contents in the struct
 	serverAddress.sin_port = htons(port); //sets port number in the server address struct
 	serverAddress.sin_family = AF_INET; //selects TCP as type of network address

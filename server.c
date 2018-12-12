@@ -34,7 +34,22 @@ pthread_mutex_t mutex0, mutex1, mutex2, mutex3, mutex4; // mutexes for our data,
 sem_t binarySem; // binary semaphore that will be used for the SIGALARM
 
 void sigAlarmHandler(int signal){
-	sem_wait(&binarySem); //wait until other threads finish up
+	// The following code is being run to prevent the edge case of a binary semaphore being waited on
+	// by the same thread that is running the signal handler. If we run through the loop 1000 times,
+	// then we will post to it because we assume that the waiting thread and the signal thread
+	// are the same and we are in a potential deadlock scenario.  On any other operation, trywait
+	// will just do wait's job without any need to go into the loop
+	int numTries = 1000;
+	int deadlockFound = 0;
+	while (sem_trywait(&binarySem) == -1){ // couldn't get the semaphore
+		if (numTries == 0){
+			sem_post(&binarySem);
+			deadlockFound = 1;
+		}
+
+		numTries--;
+	}
+
 	// Print diagnostic output
 	//outputs all current account's information
 	char *greeting = "SERVER DIAGNOSTIC INFORMATION\n";
@@ -57,24 +72,64 @@ void sigAlarmHandler(int signal){
 		write(STDOUT, outputBuf, sizeof(char)*strlen(outputBuf));
 		curr = curr->next;	
 	}
-	sem_post(&binarySem); // unlock the semaphore
+
+	if (deadlockFound == 0) // if there was a deadlock present, we don't want to post to the semaphore, otherwise the max value will be 2 on return
+		sem_post(&binarySem); // unlock the semaphore
 }
 
 // Shutdown the server and terminate all clients
 void sigIntHandler(int signal){
+	// The following code is being run to prevent the edge case of a binary semaphore being waited on
+	// by the same thread that is running the signal handler. If we run through the loop 1000 times,
+	// then we will post to it because we assume that the waiting thread and the signal thread
+	// are the same and we are in a potential deadlock scenario.  On any other operation, trywait
+	// will just do wait's job without any need to go into the loop
+	int numTries = 1000;
+	while (sem_trywait(&binarySem) == -1){ // couldn't get the semaphore
+		if (numTries == 0){
+			sem_post(&binarySem);
+		}
+
+		numTries--;
+	}
+
 	int i;
 	for (i = 0; i < *numSessions; i++){
 		Handler *myHandle = handles[i];
 		pthread_cancel(*(myHandle->threadHandle));
 		free(myHandle->threadHandle);
-		write(*(myHandle->socketfd),"quit",sizeof(char)*4); // send the shutdown message
+		write(*(myHandle->socketfd),"shutdown",sizeof(char)*8); // send the shutdown message
 		close(*(myHandle->socketfd));
 		free(myHandle->socketfd);
 		free(myHandle);
 	}
 
+	free(handles); // free the entire table
+	free(numSessions); // free the malloced integer
+	
+	// Free all memory for the accounts
+	Node *val = head;
+	for (i = 0; i < *totalAccounts; i++){ // clears everything except the head
+		Node *prev = val;
+		val = val->next;
+		free(prev->accnt->service);
+		free(prev->accnt->balance);
+		free(prev->accnt);
+		free(prev);
+	}
+
+	free(current);
+	free(totalAccounts);
+	free(bufferSize);
+
+	// Release all resources back to system for synchronization mechanisms
 	sem_destroy(&binarySem);
-	exit(1);
+	pthread_mutex_destroy(&mutex0);
+	pthread_mutex_destroy(&mutex1);
+	pthread_mutex_destroy(&mutex2);
+	pthread_mutex_destroy(&mutex3);
+	pthread_mutex_destroy(&mutex4);
+	exit(1);  // completely exit the process, otherwise non-determininstic behavior occurs
 }
 
 
@@ -88,8 +143,11 @@ void * clientServiceThread(void *param){
 	int acceptsockfd = *((int *)param);
 	char tmp[256];
 	bzero(tmp, 256);
-	sprintf(tmp, "Socket file descriptor: %d\n", acceptsockfd);
-	write(STDOUT, tmp, sizeof(char)*strlen(tmp));
+
+	// Debugging
+	//sprintf(tmp, "Socket file descriptor: %d\n", acceptsockfd);
+	//write(STDOUT, tmp, sizeof(char)*strlen(tmp));
+
 	char buf[256];
 	
 	while (clientEnd == 0) {
@@ -118,10 +176,10 @@ void * clientServiceThread(void *param){
 			write(acceptsockfd, errorMessage, sizeof(char)*strlen(errorMessage));
 			pthread_exit(NULL);	
 		}
-		write(STDOUT, buf, sizeof(char)*strlen(buf));
+		//write(STDOUT, buf, sizeof(char)*strlen(buf));
 		char *commandInfo = (char *)malloc(sizeof(char)*strlen(buf)-1);
 		memset(commandInfo, 0, sizeof(char)*strlen(buf)-1);
-		if (strcmp(buf, "quit\n") == 0) {
+		if (strcmp(buf, "quit") == 0) {
 			if (account != NULL){ // we need to free an in service account if it exists
 				char accountName[256]; //since we have to reset our local copy to null, must store the account name first before going through global LL
 				memset(accountName, 0, sizeof(char)*256);
@@ -143,12 +201,12 @@ void * clientServiceThread(void *param){
 				}
 				pthread_mutex_unlock(&mutex0); // I am dumb
 			}
-			printf("Found the account, exiting\n");	
+		
 			write(acceptsockfd, "quit", sizeof(char)*4);
 			close(acceptsockfd); //closes connection with this particular client connection
 			clientEnd = 1; // client has closed, time to join back
 		}
-		else if (strcmp(buf, "query\n") == 0) {
+		else if (strcmp(buf, "query") == 0) {
 			//if query is the first commmand, then account in thread has null name. If name isn't null, check that it's service flag is set to active, otherwise write error
 			if ((account == NULL) || (*(account->service) == 0)) {
 				char *errorMessage = "The account being queried does not have an active service session. Please run serve first to establish a service session.\n"; 
@@ -167,7 +225,7 @@ void * clientServiceThread(void *param){
 			}
 
 		}
-		else if (strcmp(buf, "end\n") == 0) {
+		else if (strcmp(buf, "end") == 0) {
 			//check if there is a valid service request on the local account struct stored in the thread
 			if ((account == NULL) || (*(account->service) == 0)) {
 				char *errorMessage = "The account you are trying to end a service session for does not have an active service session. Please run serve first to establish a service session.\n"; 
@@ -179,7 +237,7 @@ void * clientServiceThread(void *param){
 				char accountName[256]; //since we have to reset our local copy to null, must store the account name first before going through global LL
 				memset(accountName, 0, sizeof(char)*256);
 				strcpy(accountName, account->name);
-				write(STDOUT, accountName, sizeof(char)*strlen(accountName));
+				//write(STDOUT, accountName, sizeof(char)*strlen(accountName));
 				account = NULL; //update locally in the thread
 				pthread_mutex_lock(&mutex0);
 				Node *curr = (Node *)malloc(sizeof(Node));
@@ -188,7 +246,7 @@ void * clientServiceThread(void *param){
 				for (i = 0; i < *totalAccounts; i++) {
 					Account *acct = curr->accnt;
 					if (strcmp(acct->name, accountName) == 0) {
-						write(STDOUT, "Found account to end service.\n", sizeof(char)*30);
+						//write(STDOUT, "Found account to end service.\n", sizeof(char)*30);
 						sem_wait(&binarySem); // block CS to make update
 						*(acct->service) = 0;
 						sem_post(&binarySem); // re-open once update is made
@@ -363,7 +421,6 @@ void * clientServiceThread(void *param){
 		}
 	}
 	
-	printf("Exiting thread...\n");
 	return NULL; // we have reached this point if the client has shut down
 }
 
@@ -482,14 +539,17 @@ int main (int argc, char **argv) {
 		writeFatalError(errorMessage);
 		return -1;	
 	} 
-	so_linger.l_onoff = 0; //eliminates linger on socket (hopefully)
-	so_linger.l_linger = 0;
-	sockRetVal = setsockopt(*sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
-	if (sockRetVal < 0) {
-		char *errorMessage = "Error when trying to set the socket linger values.\n";
-		write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
-		return -1;
-	}
+
+	// Uncomment this if needed
+	//so_linger.l_onoff = 0; //eliminates linger on socket (hopefully)
+	//so_linger.l_linger = 0;
+	//sockRetVal = setsockopt(*sockfd, SOL_SOCKET, SO_LINGER, &so_linger, sizeof(so_linger));
+	//if (sockRetVal < 0) {
+	//	char *errorMessage = "Error when trying to set the socket linger values.\n";
+	//	write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
+	//	return -1;
+	//}
+
 	bzero((char *)&serverAddress, sizeof(serverAddress)); //zeros everything in server address struct
 	serverAddress.sin_family = AF_INET; //establishes TCP as family of connection
 	serverAddress.sin_port = htons(port); //sets serverAddress struct's port info to the user-specified port
