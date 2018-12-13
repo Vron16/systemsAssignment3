@@ -484,9 +484,23 @@ void * sessionAcceptorThread(void *param){
 		if (*numSessions == *bufferSize){ // resize needed on the buffer
 			pthread_mutex_lock(&mutex4);
 			*bufferSize = *bufferSize * 4;
-			Handler temp[*bufferSize];
-			memcpy((void *)temp, (void *)(*handles), sizeof(handles));
-			*handles = temp;
+			Handler **temp = (Handler **)malloc(sizeof(Handler *)*(*bufferSize));
+			int x;
+			for (x = 0; x < *numSessions; x++){
+				temp[x] = (Handler *)malloc(sizeof(Handler));
+				temp[x]->socketfd = (int *)malloc(sizeof(int));
+				temp[x]->threadHandle = (pthread_t *)malloc(sizeof(pthread_t));
+				memcpy((void *)temp[x]->socketfd,(void *)handles[x]->socketfd, sizeof(int));
+				memcpy((void *)temp[x]->threadHandle, (void *)handles[x]->threadHandle, sizeof(pthread_t));
+				free(handles[x]->socketfd);
+				free(handles[x]->threadHandle);
+				free(handles[x]);
+			}
+			//memcpy((void *)temp, (void *)(*handles), sizeof(handles));
+			handles = temp; // completes the resize
+			//Handler temp[*bufferSize];
+			//memcpy((void *)temp, (void *)(*handles), sizeof(handles));
+			//*handles = temp;
 			pthread_mutex_unlock(&mutex4);
 		}
 
@@ -544,7 +558,7 @@ int main (int argc, char **argv) {
 	numSessions = (int *)malloc(sizeof(int)); // keep track of all sessions (active and ended)
 	*numSessions = 0;
 	bufferSize = (int *)malloc(sizeof(int));
-	*bufferSize = 2000; // start off with a max of 10 sessions
+	*bufferSize = 10; // start off with a max of 10 sessions
 	handles = (Handler **)malloc(sizeof(Handler *)*(*bufferSize)); // initialize the table that we will use later
 
 	*sockfd = socket(AF_INET, SOCK_STREAM, 0); //creates a socket connection and generates a file descriptor for it

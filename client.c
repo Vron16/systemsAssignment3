@@ -30,29 +30,29 @@ void *commandInputThread(void *param){
 	// Set up error checking
 	int sockfd = *((int *)param);
 
-	char buf[256]; //buffer for server communication
-	char temp[256]; //buffer for user communication
+	char buf[280]; //buffer for server communication
+	char temp[280]; //buffer for user communication
 
 	while(*serverRunning) {
 		int incorrectInput = 0; 
 		char *prompt = "Welcome to Mike and Varun's Bank! Please enter one of the following commands:\ncreate - to create a new account\nserve - to open a new service session with an existing account\ndeposit - to add money to an account you have a service session with\nwithdraw - to extract money from an account you have a service session with\nquery - to return the current account balance from an account you have a service session with\nend - to end an existing service session\nquit - to exit this window entirely.\n";
 		write(STDOUT, prompt, sizeof(char)*strlen(prompt));
-		bzero(temp, 256);
+		bzero(temp, 257);
 		char *message;
 		
-		if (read(STDIN, temp, sizeof(char)*255) < 0) {
+		if (read(STDIN, temp, sizeof(char)*280) < 0) {
 			char *errorMessage = "Unable to read from standard input. Aborting program.\n";
 			writeFatalError(errorMessage);
 			pthread_exit(NULL);
 		}
 		
-		char temp2[256];
-		bzero(temp2, 256);
+		char temp2[280];
+		bzero(temp2, 280);
 		strcpy(temp2, temp);
 		//parse message and send appropriate command to the server. Eventually post-parsing part will be handled in separate thread
 		char *token = strtok(temp, " "); //gets first token from user input that occurs before a space. This should be create/serve/deposit/withdraw/query/end/quit
-		char *serverMessage = (char *)malloc(sizeof(char)*256);
-		memset(serverMessage, 0, sizeof(char)*256);
+		char *serverMessage = (char *)malloc(sizeof(char)*257);
+		memset(serverMessage, 0, sizeof(char)*257);
 		int count = 0;
 		while (token != NULL) {
 			//removeSubstring(serverMessage,"\n");
@@ -176,7 +176,9 @@ void *commandInputThread(void *param){
 				char *errorMessage = "Unable to write to the server. Aborting program.\n";
 				writeFatalError(errorMessage);
 				pthread_exit(NULL);
-			}	
+			}
+
+			free(serverMessage);	
 		}
 
 		sleep(2); //throttle user input for 2 seconds
