@@ -544,7 +544,7 @@ int main (int argc, char **argv) {
 	numSessions = (int *)malloc(sizeof(int)); // keep track of all sessions (active and ended)
 	*numSessions = 0;
 	bufferSize = (int *)malloc(sizeof(int));
-	*bufferSize = 10; // start off with a max of 10 sessions
+	*bufferSize = 2000; // start off with a max of 10 sessions
 	handles = (Handler **)malloc(sizeof(Handler *)*(*bufferSize)); // initialize the table that we will use later
 
 	*sockfd = socket(AF_INET, SOCK_STREAM, 0); //creates a socket connection and generates a file descriptor for it

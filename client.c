@@ -102,7 +102,7 @@ void *commandInputThread(void *param){
 						while (token[strIndex] != '\0' && token[strIndex] != '\n') {
 							char c = token[strIndex];
 							//write(STDOUT, &c, sizeof(char));
-							if (c < '0' || c > '9') {
+							if ((c < '0' || c > '9') && (c != '.')) {
 								char *errorMessage = "Invalid amount. Only enter positive decimal values.\n";			
 								write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
 								incorrectInput = 1;
@@ -110,13 +110,16 @@ void *commandInputThread(void *param){
 							}
 							strIndex++;
 						}
-						double value = atof(token);
-						if (value <= 0) {
-							char *errorMessage = "Invalid amount. Only enter positive decimal values.\n";			
-							write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
-							incorrectInput = 1;
-							break;
+						if (incorrectInput == 0) {
+							double value = atof(token);
+							if (value <= 0) {
+								char *errorMessage = "Invalid amount. Only enter positive decimal values.\n";			
+								write(STDOUT, errorMessage, sizeof(char)*strlen(errorMessage));
+								incorrectInput = 1;
+								break;
+							}	
 						}
+						
 					}
 					strcat(serverMessage, token); //just concatenate the rest of the string, so now serverMessage = first letter of command + accountName
 				}
